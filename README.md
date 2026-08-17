@@ -23,10 +23,32 @@ Vercel Serverless Functions. Deploys directly to Vercel; no server to manage.
 
 ## Architecture
 
+All 22 endpoints are served by a **single** Vercel serverless function —
+`api/v1/[...catchall].ts` — which parses the request path and dispatches to the matching
+handler in `handlers/v1/`. This isn't the "natural" one-file-per-route layout; it exists
+because Vercel's Hobby plan caps a deployment at 12 functions, and this API has 22 logical
+endpoints. Consolidating into one function (rather than paying for a Pro plan) means every
+endpoint's actual logic still lives in its own file under `handlers/`, completely unchanged —
+only *how Vercel wires up the URL* is different. A `vercel.json` rewrite
+(`/api/v1/:path*` → `/api/v1/[...catchall]`) forces every path under `/api/v1/` through it,
+since Vercel's automatic filesystem-based catch-all routing did not reliably match
+multi-segment paths (e.g. `/api/v1/shareholders/123/holdings`) on its own — confirmed in
+production, not just a theoretical concern.
+
+If you ever move to a Pro plan and want the natural one-function-per-route layout back, undo
+this by moving each file from `handlers/v1/` back under `api/v1/` (same relative path),
+deleting `api/v1/[...catchall].ts`, and removing the `rewrites` block from `vercel.json`.
+
 ```
 api/v1/
+  [...catchall].ts                    Routes every /api/v1/* request to handlers/ below
+
+handlers/v1/
   registers.ts                        GET /api/v1/registers
   health.ts                           GET /api/v1/health
+  annual-reports.ts, authors.ts, post-categories.ts, posts.ts, faqs.ts, faq-sections.ts,
+  contacts.ts, stockbrokers.ts, dividends.ts, register-holdings.ts, share-offers.ts,
+  share-subscriptions.ts, ecert-holdings.ts, ecert-requests.ts, shareholders-staging.ts
   shareholders/
     index.ts                          GET /api/v1/shareholders
     [regno]/
@@ -34,12 +56,14 @@ api/v1/
       accounts.ts                     GET /api/v1/shareholders/:regno/accounts
       holdings.ts                     GET /api/v1/shareholders/:regno/holdings
       dividends.ts                    GET /api/v1/shareholders/:regno/dividends
+
 lib/
   db.ts            SQL Server connection pools (frdb, estock, RegistrarApiDb)
   auth.ts          API key validation + IP allowlist check
   handler.ts        shared wrapper: auth + error handling + request logging
   registry.ts       regno <-> account/register lookups
   pagination.ts      shared paging helpers
+  listEndpoint.ts    shared paginated/filterable list-handler factory (used by the frdb table endpoints)
 ```
 
 Three databases are involved, all on the same SQL Server instance:
@@ -97,6 +121,14 @@ since `regno` values are reissued deterministically from the same source data.
 - **`certificates` and `transactionHistory` under `/holdings` come from the same underlying
   source** (`Qry_Online_Transaction`) — a certificate is just a transaction row that has a
   certificate number attached, so you'll see overlap between the two arrays by design.
+- **`/dividends` can time out (504) for regnos with many linked accounts** spanning the
+  largest registers (e.g. First Bank, FBN Holdings — millions of dividend records each).
+  Confirmed in production: a regno with 13 linked accounts across several large registers
+  exceeded the 60s function limit, while regnos with one or a few accounts respond in well
+  under a second. This is a genuine performance characteristic of `estock.paid_unclaimed_dividend`
+  at scale, not a bug — and since the API's database login is verified read-only, adding
+  indexes to fix it isn't an option here (that would need to happen on the `estock` side,
+  by whoever owns that database).
 
 ## Database setup (one-time, before first deploy)
 
