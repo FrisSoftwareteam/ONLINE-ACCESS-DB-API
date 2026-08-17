@@ -1,0 +1,22 @@
+{
+  "name": "registrar-api",
+  "version": "1.0.0",
+  "description": "Read-only server-to-server API over the share registrar database (frdb/estock)",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vercel/node": "^3.2.24",
+    "dotenv": "^17.4.2",
+    "mssql": "^11.0.1"
+  },
+  "devDependencies": {
+    "@types/mssql": "^9.1.5",
+    "@types/node": "^20.14.9",
+    "typescript": "^5.5.3",
+    "vercel": "^37.4.0"
+  }
+}
