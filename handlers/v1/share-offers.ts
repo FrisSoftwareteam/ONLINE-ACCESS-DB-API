@@ -19,7 +19,10 @@ export default createListHandler({
     { db: "RightIssue_Rights", json: "rightIssueRights" },
     { db: "Date", json: "date" },
   ],
-  filters: [{ queryParam: "register_id", db: "RegisterId", sqlType: sql.Int, mode: "exact" }],
+  filters: [
+    { queryParam: "register_id", db: "RegisterId", sqlType: sql.Int, mode: "exact" },
+    { queryParam: "register_code", db: "RegisterId", sqlType: sql.Int, mode: "exact" },
+  ],
   searchColumns: ["Description"],
   defaultSort: "Date DESC",
   sortable: { date: "Date ASC", "-date": "Date DESC" },

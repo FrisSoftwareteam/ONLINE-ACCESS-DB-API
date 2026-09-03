@@ -27,7 +27,7 @@ export default withApi(async (req: VercelRequest, res: VercelResponse) => {
 
   const holdingsResult = await pool.request().query(
     `SELECT account_number AS accountNumber, register_code AS registerCode,
-            Company_name AS companyName, Holdings AS units
+            Company_name AS companyName, Holdings AS units, branch_code AS branchCode
      FROM dbo.api_getStock
      WHERE account_number IN (${accountNumbers.join(",")}) AND register_code IN (${registerCodes.join(",")})`
   );

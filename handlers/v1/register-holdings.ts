@@ -18,6 +18,7 @@ export default createListHandler({
   ],
   filters: [
     { queryParam: "register_id", db: "RegisterId", sqlType: sql.Int, mode: "exact" },
+    { queryParam: "register_code", db: "RegisterId", sqlType: sql.Int, mode: "exact" },
     { queryParam: "account_no", db: "AccountNo", sqlType: sql.Int, mode: "exact" },
   ],
   searchColumns: ["Name", "Email"],

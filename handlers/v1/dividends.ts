@@ -14,7 +14,10 @@ export default createListHandler({
     { db: "DatePayable", json: "datePayable" },
     { db: "ClosureDate", json: "closureDate" },
   ],
-  filters: [{ queryParam: "register_id", db: "RegisterId", sqlType: sql.Int, mode: "exact" }],
+  filters: [
+    { queryParam: "register_id", db: "RegisterId", sqlType: sql.Int, mode: "exact" },
+    { queryParam: "register_code", db: "RegisterId", sqlType: sql.Int, mode: "exact" },
+  ],
   searchColumns: ["Description", "PaymentNo"],
   defaultSort: "Date DESC",
   sortable: { date: "Date ASC", "-date": "Date DESC" },

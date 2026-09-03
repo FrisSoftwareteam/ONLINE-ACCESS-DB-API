@@ -1,0 +1,921 @@
+openapi: 3.0.3
+info:
+  title: Registrar API
+  description: >
+    Read-only, server-to-server API over First Registrars' shareholder, holdings, dividend
+    and registrar reference data. Every endpoint requires an X-Api-Key header. Rate limiting
+    is opt-in per client (disabled by default) — a client with a configured limit gets a 429
+    with a Retry-After: 60 header once its per-minute cap is exceeded.
+  version: "1.0"
+  contact:
+    name: First Registrars API Support
+servers:
+  - url: https://onlineaccess.firstregistrarsapi.com/api/v1
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  parameters:
+    page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    page_size:
+      name: page_size
+      in: query
+      description: Max 200.
+      schema: { type: integer, minimum: 1, maximum: 200, default: 25 }
+  schemas:
+    Error:
+      type: object
+      properties:
+        message: { type: string }
+      required: [message]
+    Register:
+      type: object
+      properties:
+        registerCode: { type: integer }
+        companyName: { type: string }
+        active: { type: boolean }
+    ShareholderSearchResult:
+      type: object
+      properties:
+        regno: { type: string, description: "Stable cross-company shareholder identity. See guide for definition." }
+        accountNumber: { type: integer }
+        registerCode: { type: integer }
+        companyName: { type: string }
+        names: { type: string }
+        email: { type: string, nullable: true }
+        mobile: { type: string, nullable: true }
+    ShareholderDetail:
+      allOf:
+        - $ref: "#/components/schemas/ShareholderSearchResult"
+        - type: object
+          properties:
+            address: { type: string, nullable: true }
+    ShareholderAccount:
+      type: object
+      properties:
+        accountNumber: { type: integer }
+        registerCode: { type: integer }
+        companyName: { type: string }
+    CurrentHolding:
+      type: object
+      properties:
+        accountNumber: { type: integer }
+        registerCode: { type: integer }
+        companyName: { type: string }
+        units: { type: number, description: "Current unit balance for this account/register." }
+        branchCode: { type: string, nullable: true, description: "Often null — not populated for every account in the source data." }
+    Certificate:
+      type: object
+      properties:
+        certificateNo: { type: string }
+        registerCode: { type: integer }
+        accountNumber: { type: integer }
+        units: { type: number }
+        dateIssued: { type: string, format: date-time, nullable: true }
+        certificateStatus: { type: boolean }
+    Transaction:
+      type: object
+      properties:
+        transferNumber: { type: integer, nullable: true }
+        registerCode: { type: integer }
+        accountNumber: { type: integer }
+        units: { type: number }
+        transactionMode: { type: string, nullable: true }
+        dateIssued: { type: string, format: date-time, nullable: true }
+    Holdings:
+      type: object
+      properties:
+        currentHoldings:
+          type: array
+          items: { $ref: "#/components/schemas/CurrentHolding" }
+        certificates:
+          type: array
+          items: { $ref: "#/components/schemas/Certificate" }
+        transactionHistory:
+          type: array
+          items: { $ref: "#/components/schemas/Transaction" }
+    ShareholderDividend:
+      type: object
+      properties:
+        registerCode: { type: integer }
+        companyName: { type: string }
+        accountNumber: { type: integer }
+        paymentNo: { type: integer, nullable: true, description: "The dividend warrant number." }
+        amount: { type: number, nullable: true, description: "Gross dividend amount." }
+        taxAmount: { type: number, nullable: true }
+        netAmount: { type: number, nullable: true }
+        holdingUnits: { type: number, nullable: true, description: "Shareholder's unit holding as recorded against this dividend record." }
+        yearEnd: { type: string, format: date-time, nullable: true }
+        datePayable: { type: string, format: date-time, nullable: true }
+        datePaid: { type: string, format: date-time, nullable: true, description: "Only populated when status is paid." }
+        status: { type: string, enum: [paid, unpaid] }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [healthy, degraded] }
+        apiHealthy: { type: boolean }
+        frdbAvailable: { type: boolean }
+        estockAvailable: { type: boolean }
+        checkedAtUtc: { type: string, format: date-time }
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key.
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    Forbidden:
+      description: Caller IP not on this client's allowlist.
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    NotFound:
+      description: No matching record.
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    BadRequest:
+      description: Missing/invalid parameter.
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [Core]
+      responses:
+        "200": { description: Healthy, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+        "503": { description: estock unreachable, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /registers:
+    get:
+      summary: List all registers (companies)
+      tags: [Core]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Register" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /shareholders:
+    get:
+      summary: Search shareholders (requires search or register_code)
+      tags: [Shareholders]
+      parameters:
+        - name: search
+          in: query
+          description: >
+            Substring match (SQL LIKE %value%, case-insensitive) against names, email,
+            and mobile — OR'd together — plus an exact match against account number.
+            When the term looks like a phone number (mostly digits, 7+ digits), mobile
+            matching also ignores spaces/dashes/parentheses and matches the Nigerian
+            0-prefix and +234/234 country-code forms of the same number interchangeably.
+          schema: { type: string }
+        - name: register_code
+          in: query
+          schema: { type: integer }
+        - name: email_status
+          in: query
+          schema: { type: string, enum: [has_email, no_email] }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [names, "-names", account_number, "-account_number"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/ShareholderSearchResult" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /shareholders/{regno}:
+    get:
+      summary: Shareholder detail (one representative account for this regno)
+      tags: [Shareholders]
+      parameters:
+        - name: regno
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShareholderDetail" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /shareholders/{regno}/accounts:
+    get:
+      summary: All accounts/registers linked to this regno
+      tags: [Shareholders]
+      parameters:
+        - name: regno
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ShareholderAccount" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /shareholders/{regno}/holdings:
+    get:
+      summary: Current holdings, certificates and transaction history
+      tags: [Shareholders]
+      parameters:
+        - name: regno
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Holdings" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "504": { description: "Query exceeded the 60s function limit (rare, large regnos). Retry once." }
+
+  /shareholders/{regno}/dividends:
+    get:
+      summary: Per-shareholder dividend payment status (paid/unpaid)
+      tags: [Shareholders]
+      parameters:
+        - name: regno
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: status
+          in: query
+          schema: { type: string, enum: [paid, unpaid] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/ShareholderDividend" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "504": { description: "Can occur for regnos with many linked accounts on large registers. Retry once." }
+
+  /annual-reports:
+    get:
+      summary: Annual reports
+      tags: [Reference]
+      parameters:
+        - name: search
+          in: query
+          description: Matches description.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [id, "-id"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            description: { type: string }
+                            fileName: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /authors:
+    get:
+      summary: Content authors
+      tags: [Reference]
+      parameters:
+        - name: search
+          in: query
+          description: Matches name.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [name, "-name"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            name: { type: string }
+                            bio: { type: string, nullable: true }
+                            avatar: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /post-categories:
+    get:
+      summary: Post categories
+      tags: [Reference]
+      parameters:
+        - name: type
+          in: query
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches description, code.
+          schema: { type: string }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            type: { type: integer }
+                            code: { type: string }
+                            description: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /posts:
+    get:
+      summary: Posts (news/articles)
+      tags: [Reference]
+      parameters:
+        - name: category_id
+          in: query
+          description: References post-categories.id.
+          schema: { type: integer }
+        - name: author_id
+          in: query
+          description: References authors.id.
+          schema: { type: integer }
+        - name: promoted
+          in: query
+          schema: { type: boolean }
+        - name: search
+          in: query
+          description: Matches title, brief.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [date, "-date", views, "-views"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            type: { type: integer }
+                            categoryId: { type: integer, nullable: true }
+                            authorId: { type: integer, nullable: true }
+                            code: { type: string, nullable: true }
+                            title: { type: string }
+                            brief: { type: string, nullable: true }
+                            html: { type: string, nullable: true }
+                            thumb: { type: string, nullable: true }
+                            date: { type: string, format: date-time }
+                            views: { type: integer }
+                            promoted: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /faqs:
+    get:
+      summary: FAQs
+      tags: [Reference]
+      parameters:
+        - name: section_id
+          in: query
+          description: References faq-sections.id.
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches question.
+          schema: { type: string }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            sectionId: { type: integer, nullable: true }
+                            question: { type: string }
+                            html: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /faq-sections:
+    get:
+      summary: FAQ sections
+      tags: [Reference]
+      parameters:
+        - name: search
+          in: query
+          description: Matches description.
+          schema: { type: string }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            description: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /contacts:
+    get:
+      summary: Contacts
+      tags: [Reference]
+      parameters:
+        - name: search
+          in: query
+          description: Matches name, email.
+          schema: { type: string }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            name: { type: string }
+                            email: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /stockbrokers:
+    get:
+      summary: Stockbrokers
+      tags: [Reference]
+      parameters:
+        - name: search
+          in: query
+          description: Matches code, city, state.
+          schema: { type: string }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            code: { type: string }
+                            phone: { type: string, nullable: true }
+                            street: { type: string, nullable: true }
+                            city: { type: string, nullable: true }
+                            state: { type: string, nullable: true }
+                            date: { type: string, format: date-time, nullable: true }
+                            startDate: { type: string, format: date-time, nullable: true }
+                            expiryDate: { type: string, format: date-time, nullable: true }
+                            createdOn: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /dividends:
+    get:
+      summary: Register-level dividend declarations (NOT per-shareholder payment status — see /shareholders/{regno}/dividends for that)
+      tags: [Reference]
+      parameters:
+        - name: register_id
+          in: query
+          description: Same value as registerCode from GET /registers. register_code is accepted as an alias.
+          schema: { type: integer }
+        - name: register_code
+          in: query
+          description: Alias for register_id.
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches description, paymentNo.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [date, "-date"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            registerId: { type: integer }
+                            paymentNo: { type: string, nullable: true }
+                            description: { type: string, nullable: true }
+                            amountDeclared: { type: number, nullable: true }
+                            yearEnd: { type: string, format: date-time, nullable: true }
+                            date: { type: string, format: date-time, nullable: true }
+                            datePayable: { type: string, format: date-time, nullable: true }
+                            closureDate: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /register-holdings:
+    get:
+      summary: Register holdings snapshot rows
+      tags: [Reference]
+      parameters:
+        - name: register_id
+          in: query
+          description: Same value as registerCode from GET /registers. register_code is accepted as an alias.
+          schema: { type: integer }
+        - name: register_code
+          in: query
+          description: Alias for register_id.
+          schema: { type: integer }
+        - name: account_no
+          in: query
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches name, email.
+          schema: { type: string }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            registerId: { type: integer }
+                            accountNo: { type: string, nullable: true }
+                            clearingNo: { type: string, nullable: true }
+                            name: { type: string, nullable: true }
+                            address: { type: string, nullable: true }
+                            email: { type: string, nullable: true }
+                            phone: { type: string, nullable: true }
+                            mobile: { type: string, nullable: true }
+                            units: { type: number, nullable: true }
+                            date: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /share-offers:
+    get:
+      summary: Share offers (public offer / rights issue)
+      tags: [Reference]
+      parameters:
+        - name: register_id
+          in: query
+          description: Same value as registerCode from GET /registers. register_code is accepted as an alias.
+          schema: { type: integer }
+        - name: register_code
+          in: query
+          description: Alias for register_id.
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches description.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [date, "-date"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            registerId: { type: integer }
+                            uniqueKey: { type: string, nullable: true }
+                            description: { type: string, nullable: true }
+                            startDate: { type: string, format: date-time, nullable: true }
+                            endDate: { type: string, format: date-time, nullable: true }
+                            allowPublicOffer: { type: boolean }
+                            allowRightIssue: { type: boolean }
+                            publicOfferPrice: { type: number, nullable: true }
+                            publicOfferMinimum: { type: number, nullable: true }
+                            rightIssuePrice: { type: number, nullable: true }
+                            rightIssueNoOfShares: { type: number, nullable: true }
+                            rightIssueRights: { type: string, nullable: true }
+                            date: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /share-subscriptions:
+    get:
+      summary: Share subscriptions (responses to a share offer)
+      tags: [Reference]
+      parameters:
+        - name: share_offer_id
+          in: query
+          description: References share-offers.id.
+          schema: { type: integer }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            type: { type: integer }
+                            shareOfferId: { type: integer }
+                            formResponseId: { type: integer, nullable: true }
+                            noOfShares: { type: number, nullable: true }
+                            rights: { type: string, nullable: true }
+                            paymentId: { type: integer, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /ecert-holdings:
+    get:
+      summary: E-certificate holdings
+      tags: [Reference]
+      parameters:
+        - name: register_id
+          in: query
+          description: Same value as registerCode from GET /registers. register_code is accepted as an alias.
+          schema: { type: integer }
+        - name: register_code
+          in: query
+          description: Alias for register_id.
+          schema: { type: integer }
+        - name: account_no
+          in: query
+          schema: { type: string }
+        - name: search
+          in: query
+          description: Matches certificateNo.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [date, "-date"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            holderId: { type: integer, nullable: true }
+                            registerId: { type: integer }
+                            accountNo: { type: string, nullable: true }
+                            certificateNo: { type: string, nullable: true }
+                            clearingNo: { type: string, nullable: true }
+                            units: { type: number, nullable: true }
+                            date: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /ecert-requests:
+    get:
+      summary: E-certificate conversion requests
+      tags: [Reference]
+      parameters:
+        - name: stock_broker_id
+          in: query
+          description: References stockbrokers.id.
+          schema: { type: integer }
+        - name: status
+          in: query
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches description, code.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [date, "-date"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            stockBrokerId: { type: integer, nullable: true }
+                            code: { type: string, nullable: true }
+                            description: { type: string, nullable: true }
+                            brief: { type: string, nullable: true }
+                            status: { type: integer }
+                            date: { type: string, format: date-time, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /shareholders-staging:
+    get:
+      summary: Raw staging import (unreconciled — see guide caveat)
+      tags: [Reference]
+      parameters:
+        - name: register_code
+          in: query
+          schema: { type: integer }
+        - name: account_number
+          in: query
+          schema: { type: integer }
+        - name: search
+          in: query
+          description: Matches names, email, mobile, companyName.
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [account_number, "-account_number"] }
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/page_size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties: { page: {type: integer}, pageSize: {type: integer}, totalCount: {type: integer}, totalPages: {type: integer} }
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            accountNumber: { type: integer }
+                            names: { type: string, nullable: true }
+                            address: { type: string, nullable: true }
+                            email: { type: string, nullable: true }
+                            mobile: { type: string, nullable: true }
+                            companyName: { type: string, nullable: true }
+                            registerCode: { type: integer }
+                            holdings: { type: string, nullable: true, description: "Raw text as imported — parse as decimal, may contain thousands separators." }
+                            bankAccount: { type: string, nullable: true }
+                            branchCode: { type: string, nullable: true }
+                            clearingNo: { type: string, nullable: true }
+                            dateAddedToRegister: { type: string, format: date, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }

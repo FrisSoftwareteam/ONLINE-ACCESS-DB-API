@@ -7,6 +7,43 @@ export interface AuthedClient {
   clientName: string;
 }
 
+/**
+ * Atomically increments this client's request count for the current UTC minute
+ * and returns the new count. One row per (client, minute) — cheap, and safe
+ * under concurrent requests since the increment happens inside the MERGE.
+ */
+async function incrementRateLimitWindow(
+  pool: Awaited<ReturnType<typeof getApiDbPool>>,
+  clientId: number
+): Promise<number> {
+  const windowStart = new Date();
+  windowStart.setUTCSeconds(0, 0);
+
+  const result = await pool
+    .request()
+    .input("id", sql.Int, clientId)
+    .input("windowStart", sql.DateTime2, windowStart)
+    .query(
+      `MERGE dbo.ApiRateLimitWindow AS target
+       USING (SELECT @id AS ApiClientId, @windowStart AS WindowStartUtc) AS src
+         ON target.ApiClientId = src.ApiClientId AND target.WindowStartUtc = src.WindowStartUtc
+       WHEN MATCHED THEN UPDATE SET RequestCount = RequestCount + 1
+       WHEN NOT MATCHED THEN INSERT (ApiClientId, WindowStartUtc, RequestCount) VALUES (src.ApiClientId, src.WindowStartUtc, 1)
+       OUTPUT inserted.RequestCount;`
+    );
+
+  // Opportunistic cleanup of old windows for this client — cheap (indexed by the same PK prefix),
+  // no separate job needed for a table that only ever grows by ~1 row/client/minute.
+  pool
+    .request()
+    .input("id", sql.Int, clientId)
+    .input("cutoff", sql.DateTime2, new Date(Date.now() - 60 * 60 * 1000))
+    .query("DELETE FROM dbo.ApiRateLimitWindow WHERE ApiClientId = @id AND WindowStartUtc < @cutoff")
+    .catch(() => {});
+
+  return result.recordset[0].RequestCount as number;
+}
+
 function getClientIp(req: VercelRequest): string {
   const fwd = req.headers["x-forwarded-for"];
   if (typeof fwd === "string" && fwd.length > 0) return fwd.split(",")[0].trim();
@@ -48,7 +85,7 @@ export async function requireAuth(req: VercelRequest, res: VercelResponse): Prom
   const clientResult = await pool
     .request()
     .input("hash", sql.VarBinary(32), keyHash)
-    .query("SELECT Id, ClientName, IsActive FROM dbo.ApiClients WHERE ApiKeyHash = @hash");
+    .query("SELECT Id, ClientName, IsActive, RateLimitPerMinute FROM dbo.ApiClients WHERE ApiKeyHash = @hash");
 
   const client = clientResult.recordset[0];
   if (!client) {
@@ -70,6 +107,16 @@ export async function requireAuth(req: VercelRequest, res: VercelResponse): Prom
   if (allowlist.length > 0 && !allowlist.some((entry) => ipMatches(remoteIp, entry))) {
     res.status(403).json({ message: `IP ${remoteIp} is not allowlisted for this client.` });
     return null;
+  }
+
+  const rateLimit: number | null = client.RateLimitPerMinute;
+  if (rateLimit != null) {
+    const count = await incrementRateLimitWindow(pool, client.Id);
+    if (count > rateLimit) {
+      res.setHeader("Retry-After", "60");
+      res.status(429).json({ message: `Rate limit exceeded: ${rateLimit} requests per minute.` });
+      return null;
+    }
   }
 
   await pool

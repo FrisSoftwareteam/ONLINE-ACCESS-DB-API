@@ -14,7 +14,12 @@ interface DividendRow {
   companyName: string;
   accountNumber: number;
   paymentNo: number | null;
+  /** Gross dividend amount. */
   amount: number | null;
+  taxAmount: number | null;
+  netAmount: number | null;
+  /** Shareholder's unit holding as recorded against this dividend record. */
+  holdingUnits: number | null;
   yearEnd: Date | null;
   datePayable: Date | null;
   datePaid: Date | null;
@@ -67,23 +72,32 @@ export default withApi(async (req: VercelRequest, res: VercelResponse) => {
 
   const dividendsResult = await pool.request().query(
     `SELECT account_no AS accountNo, divreg_code AS registerCode, divgross_amt AS grossAmt,
+            divtax_amount AS taxAmt, div_netamt AS netAmt, total_holding AS holdingUnits,
             divdate_payable AS divDatePayable, yrend AS yearEnd, divwarrant_no AS warrantNo,
             date_paid AS datePaid, div_unclaimed AS divUnclaimed
      FROM dbo.paid_unclaimed_dividend
      WHERE account_no IN (${accountNumbers.join(",")}) AND divreg_code IN (${registerCodes.join(",")}) ${statusFilter}`
   );
 
-  const results: DividendRow[] = dividendsResult.recordset.map((r: any) => ({
-    registerCode: r.registerCode,
-    companyName: companyByCode.get(r.registerCode) ?? "",
-    accountNumber: r.accountNo,
-    paymentNo: r.warrantNo,
-    amount: r.grossAmt,
-    yearEnd: r.yearEnd,
-    datePayable: r.divDatePayable,
-    datePaid: r.divUnclaimed === 0 ? r.datePaid : null,
-    status: r.divUnclaimed === 0 ? "paid" : "unpaid",
-  }));
+  const results: DividendRow[] = dividendsResult.recordset.map((r: any) => {
+    // mssql returns SQL Server's `bit` columns as a JS boolean, not 0/1 — normalize
+    // before comparing, since `booleanValue === 0` is always false either way.
+    const isUnclaimed = r.divUnclaimed === true || r.divUnclaimed === 1;
+    return {
+      registerCode: r.registerCode,
+      companyName: companyByCode.get(r.registerCode) ?? "",
+      accountNumber: r.accountNo,
+      paymentNo: r.warrantNo,
+      amount: r.grossAmt,
+      taxAmount: r.taxAmt,
+      netAmount: r.netAmt,
+      holdingUnits: r.holdingUnits,
+      yearEnd: r.yearEnd,
+      datePayable: r.divDatePayable,
+      datePaid: isUnclaimed ? null : r.datePaid,
+      status: isUnclaimed ? "unpaid" : "paid",
+    };
+  });
 
   results.sort((a, b) => {
     const da = a.datePayable ? new Date(a.datePayable).getTime() : 0;
