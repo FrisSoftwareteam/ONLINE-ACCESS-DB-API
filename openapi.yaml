@@ -90,11 +90,11 @@ components:
     Transaction:
       type: object
       properties:
-        transferNumber: { type: integer, nullable: true }
+        transferNumber: { type: string, nullable: true, description: "Transfer reference; free text such as '23609478' or 'E-BONUS 2011'." }
         registerCode: { type: integer }
         accountNumber: { type: integer }
         units: { type: number }
-        transactionMode: { type: string, nullable: true }
+        transactionMode: { type: integer, nullable: true, description: "Numeric transaction mode code from the registrar system (e.g. 1)." }
         dateIssued: { type: string, format: date-time, nullable: true }
     Holdings:
       type: object
@@ -114,7 +114,7 @@ components:
         registerCode: { type: integer }
         companyName: { type: string }
         accountNumber: { type: integer }
-        dividendNo: { type: integer, nullable: true, description: "Dividend declaration number (the portal's 'Div. No'). Matches id on GET /dividends." }
+        dividendNo: { type: integer, nullable: true, description: "Dividend declaration number (the portal's 'Div. No'). Corresponds to id on GET /dividends only where that declaration exists in the reference data, which is not complete — do not rely on joining the two." }
         type: { type: string, nullable: true, description: "Dividend type, e.g. INTERIM or FINAL." }
         paymentNo: { type: integer, nullable: true, description: "The dividend warrant number (the portal's 'Warr. No')." }
         amount: { type: number, nullable: true, description: "Gross dividend amount." }
@@ -682,7 +682,7 @@ paths:
                           properties:
                             id: { type: integer }
                             registerId: { type: integer }
-                            accountNo: { type: string, nullable: true }
+                            accountNo: { type: integer }
                             clearingNo: { type: string, nullable: true }
                             name: { type: string, nullable: true }
                             address: { type: string, nullable: true }
@@ -743,7 +743,7 @@ paths:
                             publicOfferMinimum: { type: number, nullable: true }
                             rightIssuePrice: { type: number, nullable: true }
                             rightIssueNoOfShares: { type: number, nullable: true }
-                            rightIssueRights: { type: string, nullable: true }
+                            rightIssueRights: { type: number, nullable: true }
                             date: { type: string, format: date-time, nullable: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
@@ -779,8 +779,8 @@ paths:
                             shareOfferId: { type: integer }
                             formResponseId: { type: integer, nullable: true }
                             noOfShares: { type: number, nullable: true }
-                            rights: { type: string, nullable: true }
-                            paymentId: { type: integer, nullable: true }
+                            rights: { type: number, nullable: true }
+                            paymentId: { type: string, nullable: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /ecert-holdings:
