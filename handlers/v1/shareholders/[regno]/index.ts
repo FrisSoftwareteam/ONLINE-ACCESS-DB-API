@@ -44,6 +44,15 @@ export default withApi(async (req: VercelRequest, res: VercelResponse) => {
     return;
   }
 
+  // CSCS / clearing house number. Accounts are grouped into a regno by this number, so when one
+  // exists it is the same across every account of the regno (null for single-account regnos with none).
+  const chnResult = await pool
+    .request()
+    .input("accountNumber", sql.Int, primary.accountNumber)
+    .input("registerCode", sql.Int, primary.registerCode)
+    .query("SELECT chn FROM dbo.T_shold WHERE Acctno = @accountNumber AND regcode = @registerCode");
+  const chn = chnResult.recordset[0]?.chn;
+
   res.status(200).json({
     regno: regNo.toString(),
     accountNumber: row.accountNumber,
@@ -53,5 +62,6 @@ export default withApi(async (req: VercelRequest, res: VercelResponse) => {
     email: row.email,
     mobile: row.mobile,
     address: row.address,
+    clearingNo: chn && String(chn).trim() !== "" ? String(chn).trim() : null,
   });
 });

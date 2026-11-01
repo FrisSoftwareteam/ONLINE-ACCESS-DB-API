@@ -57,12 +57,19 @@ components:
         - type: object
           properties:
             address: { type: string, nullable: true }
+            clearingNo: { type: string, nullable: true, description: "CSCS / clearing house number. Shared by every account of the regno when one exists." }
     ShareholderAccount:
       type: object
       properties:
         accountNumber: { type: integer }
         registerCode: { type: integer }
         companyName: { type: string }
+        names: { type: string, nullable: true, description: "Name on this specific account." }
+        address: { type: string, nullable: true, description: "Address on this specific account." }
+        email: { type: string, nullable: true }
+        mobile: { type: string, nullable: true }
+        clearingNo: { type: string, nullable: true, description: "CSCS / clearing house number recorded on this account." }
+        oldAccountNo: { type: string, nullable: true, description: "Previous account number, where one exists." }
     CurrentHolding:
       type: object
       properties:
@@ -107,15 +114,18 @@ components:
         registerCode: { type: integer }
         companyName: { type: string }
         accountNumber: { type: integer }
-        paymentNo: { type: integer, nullable: true, description: "The dividend warrant number." }
+        dividendNo: { type: integer, nullable: true, description: "Dividend declaration number (the portal's 'Div. No'). Matches id on GET /dividends." }
+        type: { type: string, nullable: true, description: "Dividend type, e.g. INTERIM or FINAL." }
+        paymentNo: { type: integer, nullable: true, description: "The dividend warrant number (the portal's 'Warr. No')." }
         amount: { type: number, nullable: true, description: "Gross dividend amount." }
         taxAmount: { type: number, nullable: true }
         netAmount: { type: number, nullable: true }
         holdingUnits: { type: number, nullable: true, description: "Shareholder's unit holding as recorded against this dividend record." }
         yearEnd: { type: string, format: date-time, nullable: true }
         datePayable: { type: string, format: date-time, nullable: true }
-        datePaid: { type: string, format: date-time, nullable: true, description: "Only populated when status is paid." }
-        status: { type: string, enum: [paid, unpaid] }
+        datePaid: { type: string, format: date-time, nullable: true, description: "Payment date. Null when status is unpaid." }
+        unclaimed: { type: boolean, description: "The registrar system's own 'unclaimed' flag. Independent of whether a payment date exists." }
+        status: { type: string, enum: [paid, unpaid], description: "paid when a payment date is recorded, otherwise unpaid." }
     Health:
       type: object
       properties:
@@ -250,7 +260,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Holdings" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "504": { description: "Query exceeded the 60s function limit (rare, large regnos). Retry once." }
+        "504": { description: "Exceeded the 60s function limit. Not expected in normal use (the largest regno responds in about 3 seconds). Retry once." }
 
   /shareholders/{regno}/dividends:
     get:
@@ -280,7 +290,7 @@ paths:
                       data: { type: array, items: { $ref: "#/components/schemas/ShareholderDividend" } }
         "404": { $ref: "#/components/responses/NotFound" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "504": { description: "Can occur for regnos with many linked accounts on large registers. Retry once." }
+        "504": { description: "Exceeded the 60s function limit. Not expected in normal use (the largest regno responds in about 2 seconds). Retry once." }
 
   /annual-reports:
     get:

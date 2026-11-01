@@ -5,6 +5,21 @@ export interface AccountKey {
   registerCode: number;
 }
 
+/**
+ * Builds `(VALUES (acct, reg), ...) AS p(a, r)` so a query can join on the exact
+ * account+register pairs belonging to a regno. Matching `account IN (...) AND
+ * register IN (...)` separately is wrong: account numbers are only unique within a
+ * register, so it also matches other people's accounts (account A on register B).
+ * Values are validated integers from our own registry, never raw user input.
+ */
+export function pairsValuesClause(accounts: AccountKey[]): string {
+  const pairs = accounts.filter((a) => Number.isInteger(a.accountNumber) && Number.isInteger(a.registerCode));
+  if (pairs.length === 0) return "(VALUES (CAST(NULL AS int), CAST(NULL AS int))) AS p(a, r)";
+  // SQL Server allows at most 1000 rows in a VALUES list; the largest regno today has ~120 pairs.
+  if (pairs.length > 1000) throw new Error("Too many linked accounts for one regno.");
+  return `(VALUES ${pairs.map((a) => `(${a.accountNumber},${a.registerCode})`).join(",")}) AS p(a, r)`;
+}
+
 export async function getAccountsForRegNo(regNo: number): Promise<AccountKey[]> {
   const pool = await getApiDbPool();
   const result = await pool

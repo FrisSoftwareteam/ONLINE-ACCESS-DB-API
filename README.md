@@ -105,30 +105,26 @@ since `regno` values are reissued deterministically from the same source data.
 - **`GET /shareholders` requires a filter.** `search` or `register_code` must be provided.
   The underlying table is ~15M rows; an unfiltered scan/count times out and isn't a realistic
   use case for a search endpoint.
-- **Dividend `status` supports `paid` and `unpaid` only.** There is no `returned` status
-  (e.g. a warrant/cheque returned undelivered) trackable anywhere in the source data. Rather
-  than fabricate it, the field is simply not offered — `status` is always `"paid"` or
-  `"unpaid"`.
-- **Two of `estock`'s dividend views are broken at the database level.**
-  `api_claimed_dividend` and `api_unclaimeddividendbyphone` both throw `Invalid object name
-  'dbo.api_divclientcompany'` — they reference a table/view that no longer exists inside their
-  own definitions. This is a pre-existing bug in the legacy database, not something introduced
-  by this API. Dividends are instead sourced entirely from `dbo.paid_unclaimed_dividend`, which
-  works reliably and carries a `div_unclaimed` flag that already distinguishes paid (`0`) from
-  unpaid (`1`) — so nothing is lost by avoiding the broken views. If those views get fixed on
-  the database side, `api/v1/shareholders/[regno]/dividends.ts` is the only file that would
-  need revisiting.
+- **Dividend `status` is `paid` or `unpaid`, derived from whether `date_paid` is set.** The
+  registrar system's own `div_unclaimed` flag is returned separately as `unclaimed` — it is
+  *not* the same thing as unpaid (a dividend can be flagged unclaimed and still carry a payment
+  date). Its exact business meaning is unconfirmed, so it is passed through, not interpreted.
+- **Dividends are sourced from `dbo.T_Divs`** — the same table the Online Access portal's
+  dividend history page reads (via the `___SDividends` view). Do not use
+  `dbo.paid_unclaimed_dividend`: despite the name it is a one-off report limited to dividends
+  paid between 2019-01-01 and 2019-03-31 more than six months after they were payable, so it
+  misses almost every dividend. (Two other estock views, `api_claimed_dividend` and
+  `api_unclaimeddividendbyphone`, are broken at the database level — they reference the
+  nonexistent `dbo.api_divclientcompany`.)
+- **Always match a regno's accounts as exact account+register pairs** (see
+  `pairsValuesClause` in `lib/registry.ts`). Account numbers are only unique within a register,
+  so `account IN (...) AND register IN (...)` also matches other shareholders' accounts.
 - **`certificates` and `transactionHistory` under `/holdings` come from the same underlying
   source** (`Qry_Online_Transaction`) — a certificate is just a transaction row that has a
   certificate number attached, so you'll see overlap between the two arrays by design.
-- **`/dividends` can time out (504) for regnos with many linked accounts** spanning the
-  largest registers (e.g. First Bank, FBN Holdings — millions of dividend records each).
-  Confirmed in production: a regno with 13 linked accounts across several large registers
-  exceeded the 60s function limit, while regnos with one or a few accounts respond in well
-  under a second. This is a genuine performance characteristic of `estock.paid_unclaimed_dividend`
-  at scale, not a bug — and since the API's database login is verified read-only, adding
-  indexes to fix it isn't an option here (that would need to happen on the `estock` side,
-  by whoever owns that database).
+- **Performance:** the largest regno (98 accounts across 63 registers) responds in about 2–3.5
+  seconds for `/accounts`, `/holdings` and `/dividends`. (The earlier 504s on heavy regnos came
+  from querying `paid_unclaimed_dividend`, which is no longer used.)
 
 ## Database setup (one-time, before first deploy)
 

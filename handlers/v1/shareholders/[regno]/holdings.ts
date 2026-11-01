@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { withApi } from "../../../../lib/handler";
 import { getEstockPool } from "../../../../lib/db";
-import { getAccountsForRegNo } from "../../../../lib/registry";
+import { getAccountsForRegNo, pairsValuesClause } from "../../../../lib/registry";
 
 export default withApi(async (req: VercelRequest, res: VercelResponse) => {
   if (req.method !== "GET") {
@@ -21,24 +21,26 @@ export default withApi(async (req: VercelRequest, res: VercelResponse) => {
     return;
   }
 
-  const accountNumbers = Array.from(new Set(accounts.map((a) => a.accountNumber))).filter(Number.isInteger);
-  const registerCodes = Array.from(new Set(accounts.map((a) => a.registerCode))).filter(Number.isInteger);
   const pool = await getEstockPool();
 
+  // Exact account+register pairs only — matching the two lists independently would also pull in
+  // other shareholders' accounts (account numbers are only unique within a register).
+  const pairs = pairsValuesClause(accounts);
+
   const holdingsResult = await pool.request().query(
-    `SELECT account_number AS accountNumber, register_code AS registerCode,
-            Company_name AS companyName, Holdings AS units, branch_code AS branchCode
-     FROM dbo.api_getStock
-     WHERE account_number IN (${accountNumbers.join(",")}) AND register_code IN (${registerCodes.join(",")})`
+    `SELECT g.account_number AS accountNumber, g.register_code AS registerCode,
+            g.Company_name AS companyName, g.Holdings AS units, g.branch_code AS branchCode
+     FROM dbo.api_getStock AS g
+     JOIN ${pairs} ON g.account_number = p.a AND g.register_code = p.r`
   );
 
   const txResult = await pool.request().query(
-    `SELECT cert_no AS certNo, date_issue AS dateIssue, no_of_units AS noOfUnits,
-            transfer_number AS transferNumber, tranmode AS tranMode,
-            certificate_status AS certificateStatus, reg_code AS registerCode, account_no AS accountNumber
-     FROM dbo.Qry_Online_Transaction
-     WHERE account_no IN (${accountNumbers.join(",")}) AND reg_code IN (${registerCodes.join(",")})
-     ORDER BY date_issue DESC`
+    `SELECT t.cert_no AS certNo, t.date_issue AS dateIssue, t.no_of_units AS noOfUnits,
+            t.transfer_number AS transferNumber, t.tranmode AS tranMode,
+            t.certificate_status AS certificateStatus, t.reg_code AS registerCode, t.account_no AS accountNumber
+     FROM dbo.Qry_Online_Transaction AS t
+     JOIN ${pairs} ON t.account_no = p.a AND t.reg_code = p.r
+     ORDER BY t.date_issue DESC`
   );
 
   const transactions = txResult.recordset;
